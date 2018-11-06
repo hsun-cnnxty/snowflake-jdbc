@@ -15,13 +15,13 @@ import net.snowflake.client.log.SFLoggerFactory;
 import net.snowflake.client.core.HttpUtil;
 import net.snowflake.common.core.SqlState;
 
-import java.net.URI;
-
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpRequestBase;
 import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.impl.client.CloseableHttpClient;
 
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -36,6 +36,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class RestRequest
 {
   static final SFLogger logger = SFLoggerFactory.getLogger(RestRequest.class);
+
+  // Request guid per HTTP request
+  private static final String SF_REQUEST_GUID = "request_guid";
 
   // min backoff in milli before we retry due to transient issues
   static private long minBackoffInMilli = 1000;
@@ -57,6 +60,9 @@ public class RestRequest
    * @param canceling           canceling flag
    * @param withoutCookies      whether the cookie spec should be set to IGNORE
    *                            or not
+   * @param includeRetryParameters whether to include retry parameters in retried
+   *                               requests
+   * @param includeRequestGuid whether to include request_guid parameter
    * @return HttpResponse Object get from server
    * @throws java.io.IOException                             java io exception
    * @throws net.snowflake.client.jdbc.SnowflakeSQLException Request timeout Exception or Illegal State Exception i.e.
@@ -68,16 +74,21 @@ public class RestRequest
       long retryTimeout,
       int injectSocketTimeout,
       AtomicBoolean canceling,
-      boolean withoutCookies) throws IOException, SnowflakeSQLException
+      boolean withoutCookies,
+      boolean includeRetryParameters,
+      boolean includeRequestGuid) throws IOException, SnowflakeSQLException
   {
     CloseableHttpResponse response = null;
+
+    // time the client started attempting to submit request
+    final long startTime = System.currentTimeMillis();
 
     // start time for each request,
     // used for keeping track how much time we have spent
     // due to network issues so that we can compare against the user
     // specified network timeout to make sure we do not retry infinitely
     // when there are transient network/GS issues.
-    long startTimePerRequest = System.currentTimeMillis();
+    long startTimePerRequest = startTime;
 
     // total elapsed time due to transient issues.
     long elapsedMilliForTransientIssues = 0;
@@ -123,20 +134,32 @@ public class RestRequest
         }
 
         /*
-         * Add retry=true for the first retry request
+         * Add retryCount if the first request failed
          * GS can uses the parameter for optimization. Specifically GS
          * will only check metadata database to see if a query has been running
          * for a retry request. This way for the majority of query requests
          * which are not part of retry we don't have to pay the performance
          * overhead of looking up in metadata database.
          */
-        if (retryCount == 1)
+        URIBuilder builder = new URIBuilder(httpRequest.getURI());
+        if (retryCount > 0)
         {
-          URI uri = (new URIBuilder(httpRequest.getURI())).
-              addParameter("retry", "true").build();
-
-          httpRequest.setURI(uri);
+          builder.setParameter(
+              "retryCount", String.valueOf(retryCount));
+          if (includeRetryParameters)
+          {
+            builder.setParameter(
+                "clientStartTime", String.valueOf(startTime));
+          }
         }
+
+        if (includeRequestGuid)
+        {
+          // Add request_guid for better tracing
+          builder.setParameter(SF_REQUEST_GUID, UUID.randomUUID().toString());
+        }
+
+        httpRequest.setURI(builder.build());
 
         response = httpClient.execute(httpRequest);
       }
@@ -272,9 +295,21 @@ public class RestRequest
         {
           try
           {
-            Thread.sleep(backoffInMilli - elapsedMilliForLastCall);
-            elapsedMilliForTransientIssues +=
-                (backoffInMilli - elapsedMilliForLastCall);
+            final long backoffOrigin = 1000L;
+            long backoffBound = (backoffInMilli - elapsedMilliForLastCall)*3;
+
+            // guarantee bound is greater than origin
+            long newOrigin = Math.min(backoffOrigin, backoffBound);
+            long newBound = Math.max(backoffOrigin, backoffBound);
+
+            // use decorrelated jitter in retry time
+            // see https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
+            backoffInMilli = Math.min(
+                maxBackoffInMilli,
+                ThreadLocalRandom.current().nextLong(newOrigin, newBound)
+            );
+            Thread.sleep(backoffInMilli);
+            elapsedMilliForTransientIssues += backoffInMilli;
           }
           catch (InterruptedException ex1)
           {

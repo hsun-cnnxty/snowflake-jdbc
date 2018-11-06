@@ -4,6 +4,7 @@
 
 package net.snowflake.client.loader;
 
+import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -12,7 +13,6 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.logging.Level;
 import java.util.zip.GZIPOutputStream;
 
 import net.snowflake.client.log.SFLogger;
@@ -84,16 +84,7 @@ public class BufferStage
   // List of all scheduled uploaders
   private ArrayList<FileUploader> _uploaders = new ArrayList<>();
 
-  private BufferStage() {
-    _directory = null;
-    _location = null;
-    _stamp = null;
-    _op = null;
-    _csvFileBucketSize = 0;
-    _csvFileSize = 0;
-  }
-
-  public BufferStage(StreamLoader loader, Operation op, long csvFileBucketSize, long csvFileSize)
+  BufferStage(StreamLoader loader, Operation op, long csvFileBucketSize, long csvFileSize)
   {
     LOGGER.debug("Operation: {}", op);
 
@@ -146,11 +137,29 @@ public class BufferStage
     try {
       String fName = _directory.getAbsolutePath()
                      + File.separatorChar + StreamLoader.FILE_PREFIX
-                     + _stamp + _fileCount + StreamLoader.FILE_SUFFIX;
-      LOGGER.debug("openFile: {}", fName);
+                     + _stamp + _fileCount;
+      if (_loader._compressDataBeforePut)
+      {
+        fName += StreamLoader.FILE_SUFFIX;
+      }
+      LOGGER.info("openFile: {}", fName);
 
-      FileOutputStream outputFile = new FileOutputStream(fName);
-      _outstream = new GZIPOutputStream(outputFile, 64 * 1024, true);
+      OutputStream fileStream = new FileOutputStream(fName);
+      if (_loader._compressDataBeforePut)
+      {
+        OutputStream gzipOutputStream = new GZIPOutputStream(
+            fileStream, 64 * 1024,  true) {
+          {
+            def.setLevel((int)_loader._compressLevel);
+          }
+        };
+        _outstream = new BufferedOutputStream(gzipOutputStream);
+      }
+      else
+      {
+        _outstream = new BufferedOutputStream(fileStream);
+      }
+
       _file = new File(fName);
 
       _fileCount++;
@@ -158,14 +167,13 @@ public class BufferStage
     catch (IOException ex) {
       _loader.abort(new Loader.ConnectionError(Utils.getCause(ex)));
     }
-
   }
 
   private static byte[] newLineBytes = "\n".getBytes(UTF_8);
 
 
   // not thread safe
-  public boolean stageData(byte[] line, boolean newLine) throws IOException
+  boolean stageData(final byte[] line) throws IOException
   {
     if (this._rowCount % 10000 == 0) {
       LOGGER.debug(
@@ -174,9 +182,7 @@ public class BufferStage
     _outstream.write(line);
     _currentSize += line.length;
 
-    if (newLine) {
-      _outstream.write(newLineBytes);
-    }
+    _outstream.write(newLineBytes);
     this._rowCount++;
 
     if (_loader._testRemoteBadCSV) {
@@ -189,12 +195,13 @@ public class BufferStage
     }
 
     if(_currentSize >= this._csvFileSize) {
-      LOGGER.debug("currentSize: {}, Threshold: {},"
+      LOGGER.info("name: {}, currentSize: {}, Threshold: {},"
                       + " fileCount: {}, fileBucketSize: {}",
-              _currentSize, this._csvFileSize, _fileCount,
+              _file.getAbsolutePath(), _currentSize, this._csvFileSize, _fileCount,
               this._csvFileBucketSize);
       _outstream.flush();
       _outstream.close();
+      _outstream = null;
       FileUploader fu = new FileUploader(_loader, _location, _file);
       fu.upload();
       _uploaders.add(fu);
@@ -208,12 +215,15 @@ public class BufferStage
 
   /**
    * Wait for all files to finish uploading and schedule stage for processing
-   * @throws InterruptedException
-   * @throws IOException
+   * @throws IOException raises an exception if IO error occurs
    */
-  void completeUploading() throws InterruptedException, IOException
+  void completeUploading() throws IOException
   {
-    LOGGER.debug("CurrentSize: {}", _currentSize);
+    LOGGER.debug("name: {}, currentSize: {}, Threshold: {},"
+            + " fileCount: {}, fileBucketSize: {}",
+        _file.getAbsolutePath(),
+        _currentSize, this._csvFileSize, _fileCount,
+        this._csvFileBucketSize);
 
     _outstream.flush();
     _outstream.close();
@@ -227,7 +237,6 @@ public class BufferStage
       // delete empty file
       _file.delete();
     }
-
 
     for(FileUploader fu: _uploaders)
     {
@@ -243,16 +252,14 @@ public class BufferStage
     {
       setState(State.EMPTY);
     }
-
-     return;
   }
 
-  public String getRemoteLocation()
+  String getRemoteLocation()
   {
     return remoteSeparator(_location);
   }
 
-  public Operation getOp()
+  Operation getOp()
   {
     return _op;
   }
@@ -292,7 +299,7 @@ public class BufferStage
     }
   }
 
-  public int getRowCount()
+  int getRowCount()
   {
     return _rowCount;
   }
@@ -313,7 +320,7 @@ public class BufferStage
    * @param fname
    * @return escaped file name
    */
-  private final static String escapeFileSeparatorChar(String fname) {
+  private static String escapeFileSeparatorChar(String fname) {
     if (File.separatorChar == '\\') {
       return fname.replaceAll(File.separator + File.separator, "_");
     } else {

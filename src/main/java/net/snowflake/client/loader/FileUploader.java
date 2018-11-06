@@ -26,7 +26,7 @@ public class FileUploader implements Runnable {
   private final String _stage;
   private final File _file;
 
-  public FileUploader(StreamLoader loader, String stage, File file) {
+  FileUploader(StreamLoader loader, String stage, File file) {
     LOGGER.debug("");
     _loader = loader;
     _thread = new Thread(this);
@@ -39,7 +39,7 @@ public class FileUploader implements Runnable {
     // throttle up will wait if too many files are uploading
     LOGGER.debug("");
     _loader.throttleUp();
-     _thread.start();
+    _thread.start();
   }
 
   @Override
@@ -103,14 +103,27 @@ public class FileUploader implements Runnable {
                               + "' '"
                               + remoteStage
                               + "' parallel=10"        // upload chunks in parallel
-                              + " overwrite=true"      // skip file existence check
-                              + " auto_compress=false"
-                              + " source_compression=gzip";
+                              + " overwrite=true";     // skip file existence check
+        if (_loader._compressDataBeforePut)
+        {
+          putStatement += " auto_compress=false"
+                        + " SOURCE_COMPRESSION=gzip";
+        }
+        else if (_loader._compressFileByPut)
+        {
+          putStatement += " auto_compress=true";
+        }
+        else
+        {
+          // don't compress file at all
+          putStatement += " auto_compress=false";
+        }
 
         Statement statement = _loader.getPutConnection().createStatement();
         try {
-          LOGGER.debug("Put Statement: {}", putStatement);
+          LOGGER.info("Put Statement start: {}", putStatement);
           statement.execute(putStatement);
+          LOGGER.info("Put Statement end: {}", putStatement);
           ResultSet putResult = statement.getResultSet();
 
           putResult.next();
@@ -177,7 +190,7 @@ public class FileUploader implements Runnable {
    * convert any back slashes to forward slashes if necessary when converting
    * a local filename to a one suitable for S3
    * 
-   * @param fname
+   * @param fname a file name to PUT
    * @return A fname string for S3
    */
   private String remoteSeparator(String fname) {
@@ -190,7 +203,7 @@ public class FileUploader implements Runnable {
   /**
    * convert any forward slashes to back slashes if necessary when converting
    * a S3 file name to a local file name
-   * @param fname
+   * @param fname a file name to PUT
    * @return A fname string for the local FS (Windows/other Unix like OS)
    */
   private String localSeparator(String fname) {
