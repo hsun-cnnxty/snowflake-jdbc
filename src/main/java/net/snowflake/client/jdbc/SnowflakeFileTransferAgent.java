@@ -130,7 +130,7 @@ public class SnowflakeFileTransferAgent implements SnowflakeFixedView
   public Map getStageCredentials() {
     return new HashMap(stageInfo.getCredentials());
     }
-  
+
   public List<RemoteStoreFileEncryptionMaterial> getEncryptionMaterial() {
     return new ArrayList(encryptionMaterial);
     }
@@ -138,7 +138,7 @@ public class SnowflakeFileTransferAgent implements SnowflakeFixedView
   public Map<String, RemoteStoreFileEncryptionMaterial> getSrcToMaterialsMap() {
     return new HashMap(srcFileToEncMat);
     }
-  
+
   public String getStageLocation() {
     return stageInfo.getLocation();
     }
@@ -671,7 +671,7 @@ public class SnowflakeFileTransferAgent implements SnowflakeFixedView
 
         String digest = null;
 
-        logger.debug("Dest file name={}, orig size={}",  destFileName, 
+        logger.debug("Dest file name={}, orig size={}",  destFileName,
              uploadSize);
 
         // Temp file that needs to be cleaned up when upload was successful
@@ -1043,7 +1043,7 @@ public class SnowflakeFileTransferAgent implements SnowflakeFixedView
     String stageLocation = jsonNode.path("data").path("stageInfo").
                     path("location").asText();
 
-    int parallel = jsonNode.path("data").path("parallel").asInt();
+    parallel = jsonNode.path("data").path("parallel").asInt();
 
     overwrite = jsonNode.path("data").path("overwrite").asBoolean(false);
 
@@ -2024,7 +2024,7 @@ public class SnowflakeFileTransferAgent implements SnowflakeFixedView
           if (commandType == CommandType.DOWNLOAD &&
               !(new File(localFile)).exists())
           {
-            logger.debug("File does not exist locally, will download {}", 
+            logger.debug("File does not exist locally, will download {}",
                         mappedSrcFile);
             continue;
           }
@@ -2296,7 +2296,7 @@ public class SnowflakeFileTransferAgent implements SnowflakeFixedView
         }
         else
         {
-          logger.debug("digest matches between local and stage, will skip {}", 
+          logger.debug("digest matches between local and stage, will skip {}",
                       mappedSrcFile);
 
           // skip the file given that the check sum is the same b/w source
